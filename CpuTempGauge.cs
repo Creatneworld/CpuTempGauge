@@ -1,50 +1,45 @@
-﻿using System;
+using System;
 using System.Drawing;
 using System.Windows.Forms;
-using System.Timers;
 using System.Runtime.InteropServices;
 using LibreHardwareMonitor.Hardware;
 
 public class CpuTempGauge : Form
 {
-    [DllImport("gdi32.dll")] public static extern IntPtr CreateRoundRectRgn(int x1, int y1, int x2, int y2, int w, int h);
-    [DllImport("user32.dll")] public static extern bool ReleaseCapture();
-    [DllImport("user32.dll")] public static extern int SendMessage(IntPtr hWnd, int Msg, int wParam, int lParam);
-    const int WM_NCLBUTTONDOWN = 0xA1, HTCAPTION = 2;
-    
-    private float curr = 0, peak = 0;
+    private float currentTemp = 0, peakTemp = 0;
     private Computer computer;
-    private System.Timers.Timer timer;
-    private Label lblTemp, lblPeak, lblCpuTag;
-    
+    private System.Timers.Timer readTimer;
+    private Label lblCpuTag, lblTemp, lblPeak;
+    private NotifyIcon trayIcon;
+    private ContextMenuStrip trayMenu;
+    private bool dragging = false;
+    private Point dragStart;
+
     public CpuTempGauge()
     {
-        this.Text = "CPU温度";
+        this.Text = "CPU Temperature";
         this.FormBorderStyle = FormBorderStyle.None;
         this.Width = 180; this.Height = 72;
         this.TopMost = true; this.ShowInTaskbar = false;
-        this.BackColor = Color.FromArgb(28, 28, 28);
-        this.StartPosition = FormStartPosition.Manual;
-        
-        var rgn = CreateRoundRectRgn(0, 0, 180, 72, 36, 36);
-        this.Region = System.Drawing.Region.FromHrgn(rgn);
-        
-        var screen = Screen.PrimaryScreen;
-        this.Left = screen.WorkingArea.Right - this.Width - 10;
+        this.BackColor = Color.Black;
+        this.Opacity = 0.40;
+
+        var scr = Screen.PrimaryScreen;
+        this.Left = scr.WorkingArea.Right - this.Width - 10;
         this.Top = 10;
-        
+
         lblCpuTag = new Label();
         lblCpuTag.Text = "CPU";
-        lblCpuTag.ForeColor = Color.FromArgb(140, 200, 200, 200);
+        lblCpuTag.ForeColor = Color.White;
         lblCpuTag.Font = new Font("Microsoft YaHei", 10, FontStyle.Bold);
         lblCpuTag.TextAlign = ContentAlignment.MiddleLeft;
         lblCpuTag.Location = new Point(10, 0);
         lblCpuTag.Size = new Size(40, 44);
         lblCpuTag.BackColor = Color.Transparent;
         this.Controls.Add(lblCpuTag);
-        
+
         lblTemp = new Label();
-        lblTemp.Text = "--°C";
+        lblTemp.Text = "--\u00b0C";
         lblTemp.ForeColor = Color.Lime;
         lblTemp.Font = new Font("Consolas", 26, FontStyle.Bold);
         lblTemp.TextAlign = ContentAlignment.MiddleRight;
@@ -52,91 +47,138 @@ public class CpuTempGauge : Form
         lblTemp.Size = new Size(175, 44);
         lblTemp.BackColor = Color.Transparent;
         this.Controls.Add(lblTemp);
-        
+
         lblPeak = new Label();
-        lblPeak.Text = "峰值: --°C";
-        lblPeak.ForeColor = Color.FromArgb(130, 200, 200, 200);
+        lblPeak.Text = "\u5cf0\u503c: --\u00b0C";
+        lblPeak.ForeColor = Color.FromArgb(160, 255, 255, 255);
         lblPeak.Font = new Font("Consolas", 9);
         lblPeak.TextAlign = ContentAlignment.MiddleCenter;
         lblPeak.Location = new Point(0, 42);
         lblPeak.Size = new Size(158, 22);
         lblPeak.BackColor = Color.Transparent;
         this.Controls.Add(lblPeak);
-        
+
         var closeBtn = new Label();
-        closeBtn.Text = "×";
-        closeBtn.ForeColor = Color.FromArgb(110, 200, 200, 200);
+        closeBtn.Text = "\u00d7";
+        closeBtn.ForeColor = Color.FromArgb(120, 255, 255, 255);
         closeBtn.Font = new Font("Consolas", 10);
         closeBtn.Location = new Point(158, 44);
         closeBtn.Size = new Size(18, 18);
         closeBtn.BackColor = Color.Transparent;
-        closeBtn.Click += (s, e) => { timer.Stop(); computer.Close(); Application.Exit(); };
+        closeBtn.Click += (object sb, EventArgs ev) => { this.Hide(); };
         this.Controls.Add(closeBtn);
-        
-        // 双击重置峰值 - MouseDown + Clicks=2 比 DoubleClick 事件更可靠
-        MouseEventHandler click = null;
-        click = (s, e) => {
-            if (e.Button == MouseButtons.Left && e.Clicks == 2) { peak = curr; UpdatePeakLabel(); }
-            if (e.Button == MouseButtons.Left && e.Clicks == 1) { ReleaseCapture(); SendMessage(this.Handle, WM_NCLBUTTONDOWN, HTCAPTION, 0); }
+
+        MouseEventHandler md = (object sb, MouseEventArgs ev) => {
+            if (ev.Button == MouseButtons.Left) { dragging = true; dragStart = new Point(ev.X, ev.Y); }
         };
-        this.MouseDown += click;
-        lblTemp.MouseDown += click;
-        lblCpuTag.MouseDown += click;
-        lblPeak.MouseDown += click;
-        
-        computer = new Computer(); computer.IsCpuEnabled = true; computer.Open();
-        timer = new System.Timers.Timer(3000);
-        timer.Elapsed += (s, e) => UpdateTemp();
-        timer.AutoReset = true; timer.Start();
+        MouseEventHandler mm = (object sb, MouseEventArgs ev) => {
+            if (dragging) { this.Left += ev.X - dragStart.X; this.Top += ev.Y - dragStart.Y; }
+        };
+        MouseEventHandler mu = (object sb, MouseEventArgs ev) => { dragging = false; };
+
+        this.MouseDown += md; this.MouseMove += mm; this.MouseUp += mu;
+        lblCpuTag.MouseDown += md; lblCpuTag.MouseMove += mm; lblCpuTag.MouseUp += mu;
+        lblTemp.MouseDown += md; lblTemp.MouseMove += mm; lblTemp.MouseUp += mu;
+        lblPeak.MouseDown += md; lblPeak.MouseMove += mm; lblPeak.MouseUp += mu;
+
+        trayIcon = new NotifyIcon();
+        trayIcon.Icon = CreateTempIcon(0);
+        trayIcon.Text = "CPU: --\u00b0C | \u5cf0\u503c: --\u00b0C";
+        trayIcon.Visible = true;
+        trayIcon.Click += (object sb, EventArgs ev) => {
+            this.Visible = !this.Visible;
+            if (this.Visible) { this.Activate(); this.TopMost = true; }
+        };
+
+        trayMenu = new ContextMenuStrip();
+        var exitItem = trayMenu.Items.Add("\u9000\u51fa");
+        exitItem.Click += (object sb, EventArgs ev) => {
+            readTimer.Stop(); readTimer.Dispose();
+            computer.Close(); trayIcon.Visible = false;
+            Application.Exit();
+        };
+        trayIcon.ContextMenuStrip = trayMenu;
+
+        computer = new Computer { IsCpuEnabled = true };
+        computer.Open();
+
+        var initTimer = new Timer();
+        initTimer.Interval = 300;
+        initTimer.Tick += delegate(object s, EventArgs e) { initTimer.Stop(); initTimer.Dispose(); ReadTemperature(); };
+        initTimer.Start();
+
+        readTimer = new System.Timers.Timer(3000);
+        readTimer.Elapsed += (object s, System.Timers.ElapsedEventArgs e) => ReadTemperature();
+        readTimer.AutoReset = true;
+        readTimer.Start();
     }
-    
-    private void UpdateTemp()
+
+    private void ReadTemperature()
     {
         try {
             foreach (var hw in computer.Hardware) {
                 hw.Update();
                 foreach (var se in hw.Sensors) {
                     if (se.SensorType == SensorType.Temperature && se.Value.HasValue && se.Name == "CPU Package") {
-                        float t = se.Value.Value; curr = t;
-                        if (t > peak) peak = t;
+                        float t = se.Value.Value;
+                        currentTemp = t;
+                        if (t > peakTemp) { peakTemp = t; }
                         this.Invoke((MethodInvoker)delegate {
-                            lblTemp.Text = Math.Round(curr) + "°C";
-                            if (curr < 50) lblTemp.ForeColor = Color.Lime;
-                            else if (curr < 65) lblTemp.ForeColor = Color.Orange;
-                            else if (curr < 80) lblTemp.ForeColor = Color.OrangeRed;
-                            else lblTemp.ForeColor = Color.Red;
-                            UpdatePeakLabel();
+                            lblTemp.Text = Math.Round(currentTemp) + "\u00b0C";
+                            Color c;
+                            if (currentTemp < 50) { c = Color.Lime; }
+                            else if (currentTemp < 65) { c = Color.Orange; }
+                            else if (currentTemp < 80) { c = Color.OrangeRed; }
+                            else { c = Color.Red; }
+                            lblTemp.ForeColor = c;
+                            lblPeak.Text = peakTemp > 0.5f ? "\u5cf0\u503c: " + Math.Round(peakTemp) + "\u00b0C" : "\u5cf0\u503c: --\u00b0C";
+                            trayIcon.Icon = CreateTempIcon(currentTemp);
+                            trayIcon.Text = "CPU: " + Math.Round(currentTemp) + "\u00b0C | \u5cf0\u503c: " + Math.Round(peakTemp) + "\u00b0C";
                         });
                         return;
                     }
                 }
             }
-        } catch {}
+        } catch { }
     }
-    
-    private void UpdatePeakLabel()
+
+    private Icon CreateTempIcon(float temp)
     {
-        try {
-            this.Invoke((MethodInvoker)delegate {
-                lblPeak.Text = peak > 0.5f ? "峰值: " + Math.Round(peak) + "°C" : "峰值: --°C";
-                if (peak < 60) lblPeak.ForeColor = Color.FromArgb(130, 200, 200, 200);
-                else if (peak < 75) lblPeak.ForeColor = Color.Orange;
-                else lblPeak.ForeColor = Color.Red;
-            });
-        } catch {}
+        var bmp = new Bitmap(16, 16);
+        var g = Graphics.FromImage(bmp);
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+        Color color;
+        if (temp < 0.5f) { color = Color.Gray; }
+        else if (temp < 50) { color = Color.Lime; }
+        else if (temp < 65) { color = Color.Orange; }
+        else if (temp < 80) { color = Color.OrangeRed; }
+        else { color = Color.Red; }
+        var brush = new SolidBrush(color);
+        g.FillEllipse(brush, 1, 1, 14, 14);
+        brush.Dispose();
+        var pen = new Pen(Color.FromArgb(180, 255, 255, 255), 1);
+        g.DrawEllipse(pen, 1, 1, 14, 14);
+        pen.Dispose();
+        var font = new Font("Consolas", 7, FontStyle.Bold);
+        var tb = new SolidBrush(Color.White);
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
+        g.DrawString("C", font, tb, 4, 3);
+        font.Dispose(); tb.Dispose();
+        var icon = Icon.FromHandle(bmp.GetHicon());
+        g.Dispose(); bmp.Dispose();
+        return icon;
     }
-    
+
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
-        timer.Stop(); timer.Dispose(); computer.Close();
+        if (readTimer != null) { readTimer.Stop(); readTimer.Dispose(); }
+        if (computer != null) { computer.Close(); }
+        if (trayIcon != null) { trayIcon.Dispose(); }
         base.OnFormClosed(e);
     }
-    
+
+    protected override void OnFormClosing(FormClosingEventArgs e) { trayIcon.Visible = false; base.OnFormClosing(e); }
+
     [STAThread]
-    static void Main()
-    {
-        Application.EnableVisualStyles();
-        Application.SetCompatibleTextRenderingDefault(false);
-        Application.Run(new CpuTempGauge());
-    }
+    static void Main() { Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false); Application.Run(new CpuTempGauge()); }
 }
