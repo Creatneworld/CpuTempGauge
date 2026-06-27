@@ -1,0 +1,9 @@
+﻿# CPU温度计 - 忽略文件
+*.pdb
+*.user
+*.suo
+.vs/
+bin/
+obj/
+.DS_Store
+Thumbs.db
