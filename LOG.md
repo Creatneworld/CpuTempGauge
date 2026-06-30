@@ -21,3 +21,25 @@
 
 ### 待办
 - [x] 全部完成
+
+## 2026-06-30
+
+### 完成
+- 移除全部日志写入代码（Log() 方法及所有调用）
+- 删除桌面日志文件 CpuTempGauge.log
+- 删除旧版计划任务 \CpuTempGauge（指向 D:\CPUThermometer\CpuTempGaugeNew.exe）
+- 修复「已启动」弹窗问题（旧版与新版本互斥体冲突）
+- 零警告编译通过
+
+### 技术决策
+- **日志清理**：调试日志对用户无实际价值，温度已在悬浮窗和托盘图标上实时显示
+- **重复启动根因**：旧版 \CpuTempGauge 计划任务与新版使用同一互斥体名，开机同时启动导致冲突
+- **当前自启**：仅保留 \CpuTempGauge_StartPawnIO → startup.bat
+- **编译修复**：添加 -target:winexe，消除控制台窗口（避免「大对话框」）
+- **定位修复**：添加 StartPosition = FormStartPosition.Manual，确保窗口固定在右上角
+- **GPU 读取修复**：CPU/GPU 传感器改为独立并行扫描，消除硬件枚举顺序依赖
+- **旧目录清理**：删除 D:\CPUThermometer 残留调试文件
+- **最终确认**：编译 -target:winexe 无控制台窗口，StartPosition=Manual 定位右上角
+- **GPU 传感器修复**：排除 Hot Spot/VRAM/Memory 等非核心传感器，确保读取真实 GPU Core 温度
+- **传感器验证**：通过 LHM dump 确认本机 CPU 温度传感器全部为 null（需走 WMI 兜底），GPU 有两个温度（Core=57°C, Hot Spot=70°C）
+- **旧目录清理**：删除 D:\CPUThermometer

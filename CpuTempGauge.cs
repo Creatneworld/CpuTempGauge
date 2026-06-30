@@ -1,4 +1,4 @@
-using System;
+ï»¿using System;
 using System.Drawing;
 using System.Windows.Forms;
 using System.Threading;
@@ -17,23 +17,16 @@ public class CpuTempGauge : Form
     private ContextMenuStrip trayMenu;
     private bool dragging = false;
     private Point dragStart;
-    private string logPath;
-    
-    private void Log(string m) {
-        try { System.IO.File.AppendAllText(logPath, DateTime.Now.ToString("HH:mm:ss ") + m + "\r\n"); } catch { }
-    }
 
     public CpuTempGauge()
     {
-        logPath = Environment.GetFolderPath(Environment.SpecialFolder.Desktop) + "\\CpuTempGauge.log";
-        Log("=== CpuTempGauge START ===");
-        
         this.Text = "CPU Temp";
         this.FormBorderStyle = FormBorderStyle.None;
         this.Width = 180; this.Height = 72;
         this.TopMost = true; this.ShowInTaskbar = false;
         this.BackColor = Color.Black;
         this.Opacity = 0.40;
+        this.StartPosition = FormStartPosition.Manual;
         
         var scr = Screen.PrimaryScreen;
         this.Left = scr.WorkingArea.Right - this.Width - 10;
@@ -113,69 +106,41 @@ public class CpuTempGauge : Form
             computer.IsCpuEnabled = true;
             computer.IsGpuEnabled = true;
             computer.Open();
-            Log("LHM Opened");
-        } catch (Exception ex) {
-            Log("LHM error: " + ex.Message);
-        }
+        } catch { }
 
         timer = new System.Windows.Forms.Timer();
         timer.Interval = 3000;
         timer.Tick += (object s, EventArgs e) => { Tick(); };
         timer.Start();
-        Log("Timer started");
     }
 
     private void Tick()
     {
         try {
-            if (computer == null) { Log("No computer"); return; }
+            hasCpu = false; hasGpu = false;
             
-            // Update all hardware
             foreach (var hw in computer.Hardware) {
                 hw.Update();
-            }
-            
-            // Collect CPU temperature (prefer Package)
-            hasCpu = false;
-            float bestCpu = 0;
-            foreach (var hw in computer.Hardware) {
                 foreach (var se in hw.Sensors) {
-                    if (se.SensorType == SensorType.Temperature && se.Value.HasValue) {
-                        if (hw.HardwareType == HardwareType.Cpu) {
-                            string n = se.Name ?? "";
-                            float t = se.Value.Value;
-                            if (n.Contains("Package")) { bestCpu = t; hasCpu = true; break; }
-                            if ((n.Contains("Core Max") || n.Contains("Core Average")) && !hasCpu)
-                                { bestCpu = t; hasCpu = true; }
-                            if (!hasCpu) { bestCpu = t; hasCpu = true; }
-                        }
+                    if (se.SensorType != SensorType.Temperature || !se.Value.HasValue) continue;
+                    if (hw.HardwareType == HardwareType.Cpu) {
+                        string n = se.Name ?? "";
+                        float t = se.Value.Value;
+                        if (n.Contains("Package") || n.Contains("Core Max") || n.Contains("Core (avg)")) { cpuTemp = t; hasCpu = true; }
+                        else if (!hasCpu) { cpuTemp = t; hasCpu = true; }
+                    }
+                    if (hw.HardwareType == HardwareType.GpuNvidia || hw.HardwareType == HardwareType.GpuAmd) {
+                        string n = se.Name ?? "";
+                        float t = se.Value.Value;
+                        // Skip Hot Spot (secondary), VRAM and Memory (non-core)
+                        if (n.Contains("Hot Spot") || n.Contains("VRAM") || n.Contains("Memory")) continue;
+                        if (n.Contains("Core")) { gpuTemp = t; hasGpu = true; }
+                        else if (!hasGpu) { gpuTemp = t; hasGpu = true; }
                     }
                 }
-                if (hasCpu) break;
             }
-            if (hasCpu) {
-                cpuTemp = bestCpu;
-                if (cpuTemp > cpuPeak) cpuPeak = cpuTemp;
-            }
-            
-            // Collect GPU temperature
-            hasGpu = false;
-            foreach (var hw in computer.Hardware) {
-                foreach (var se in hw.Sensors) {
-                    if (se.SensorType == SensorType.Temperature && se.Value.HasValue) {
-                        if (hw.HardwareType == HardwareType.GpuNvidia || hw.HardwareType == HardwareType.GpuAmd) {
-                            string n = se.Name ?? "";
-                            float t = se.Value.Value;
-                            if (n.Contains("Core") || n.Contains("GPU")) { gpuTemp = t; hasGpu = true; break; }
-                            if (!hasGpu) { gpuTemp = t; hasGpu = true; }
-                        }
-                    }
-                }
-                if (hasGpu) break;
-            }
-            if (hasGpu) {
-                if (gpuTemp > gpuPeak) gpuPeak = gpuTemp;
-            }
+            if (hasCpu && cpuTemp > cpuPeak) cpuPeak = cpuTemp;
+            if (hasGpu && gpuTemp > gpuPeak) gpuPeak = gpuTemp;
             
             // WMI ACPI fallback for CPU
             if (!hasCpu) {
@@ -207,12 +172,10 @@ public class CpuTempGauge : Form
                 displayTemp = cpuTemp;
                 displayPeak = cpuPeak;
                 lblTag.Text = "CPU";
-                Log(string.Format("CPU:{0}C (Pk:{1})", Math.Round(cpuTemp), Math.Round(cpuPeak)));
             } else {
                 displayTemp = gpuTemp;
                 displayPeak = gpuPeak;
                 lblTag.Text = "GPU";
-                Log(string.Format("GPU:{0}C (Pk:{1})", Math.Round(gpuTemp), Math.Round(gpuPeak)));
             }
             
             lblTemp.Text = Math.Round(displayTemp) + "\u00b0C";
@@ -229,11 +192,9 @@ public class CpuTempGauge : Form
                 : "\u5cf0\u503c: --\u00b0C";
             
             trayIcon.Icon = CreateTempIcon(displayTemp, !showCpu);
-            trayIcon.Text = string.Format("CPU:{0}¡ãC  GPU:{1}¡ãC", Math.Round(cpuTemp), Math.Round(gpuTemp));
+            trayIcon.Text = string.Format("CPU:{0}Â°C  GPU:{1}Â°C", Math.Round(cpuTemp), Math.Round(gpuTemp));
             
-        } catch (Exception ex) {
-            Log("Error: " + ex.Message);
-        }
+        } catch { }
     }
 
     private Icon CreateTempIcon(float temp, bool isGpu)
@@ -286,3 +247,8 @@ public class CpuTempGauge : Form
         mutex.Close();
     }
 }
+
+
+
+
+
